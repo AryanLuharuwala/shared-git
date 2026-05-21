@@ -32,7 +32,10 @@ RG="${RG:-surd-rg}"
 LOCATION="${LOCATION:-centralindia}"
 APP="${APP:-surd-server}"
 ENV_NAME="${ENV_NAME:-surd-env}"
-STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-surdstg$(openssl rand -hex 3)}"
+# Deterministic per subscription so re-running the script reuses the same
+# account instead of provisioning a new one each time. Storage account names
+# must be 3-24 chars, lowercase letters + digits only.
+STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-surdstg$(az account show --query id -o tsv | sha256sum | cut -c1-12)}"
 FILE_SHARE="${FILE_SHARE:-surd-data}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 SURD_TOKEN="${SURD_TOKEN:-$(openssl rand -hex 24)}"
@@ -74,20 +77,31 @@ az storage share-rm create \
   --output none
 
 # ─── 3. container apps environment + volume ──────────────────────────────
-az containerapp env create \
-  --resource-group "$RG" --name "$ENV_NAME" \
-  --location "$LOCATION" \
-  --logs-destination none \
-  --output none
+# Both of these are non-idempotent on Azure's side:
+#   - `containerapp env create` errors if the env already exists
+#   - `containerapp env storage set` rejects updates to anything other than
+#     the account key once the entry exists (returns
+#     ManagedEnvironmentStorageUpdateBadRequest)
+# Guard with show-then-create so re-runs of the script are safe.
+if ! az containerapp env show -g "$RG" -n "$ENV_NAME" >/dev/null 2>&1; then
+  az containerapp env create \
+    --resource-group "$RG" --name "$ENV_NAME" \
+    --location "$LOCATION" \
+    --logs-destination none \
+    --output none
+fi
 
-az containerapp env storage set \
-  --resource-group "$RG" --name "$ENV_NAME" \
-  --storage-name surddata \
-  --azure-file-account-name "$STORAGE_ACCOUNT" \
-  --azure-file-account-key "$STORAGE_KEY" \
-  --azure-file-share-name "$FILE_SHARE" \
-  --access-mode ReadWrite \
-  --output none
+if ! az containerapp env storage show \
+       -g "$RG" -n "$ENV_NAME" --storage-name surddata >/dev/null 2>&1; then
+  az containerapp env storage set \
+    --resource-group "$RG" --name "$ENV_NAME" \
+    --storage-name surddata \
+    --azure-file-account-name "$STORAGE_ACCOUNT" \
+    --azure-file-account-key "$STORAGE_KEY" \
+    --azure-file-share-name "$FILE_SHARE" \
+    --access-mode ReadWrite \
+    --output none
+fi
 
 # ─── 4. deploy the container app (pulls from ghcr.io) ────────────────────
 # Assumes the ghcr.io package is PUBLIC. If it's private, set GHCR_USER and
