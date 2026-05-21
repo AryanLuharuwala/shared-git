@@ -22,6 +22,10 @@ set -euo pipefail
 
 # ─── required env ────────────────────────────────────────────────────────
 : "${GHCR_IMAGE:?Set GHCR_IMAGE to e.g. ghcr.io/youruser/yourrepo/surd-server}"
+# Docker image references must be lowercase. GHA's docker/metadata-action
+# lowercases automatically, so the pushed image lives at the lowercase path
+# regardless of what the user typed.
+GHCR_IMAGE="${GHCR_IMAGE,,}"
 
 # ─── tuneable ────────────────────────────────────────────────────────────
 RG="${RG:-surd-rg}"
@@ -47,7 +51,13 @@ echo "                   ↑ save this — collaborators need it"
 echo "────────────────────────────────────────────"
 
 az extension add --name containerapp --only-show-errors --upgrade 2>/dev/null || true
+# Container Apps needs Microsoft.App. Storage account needs Microsoft.Storage
+# (usually pre-registered, but harmless if not). Microsoft.OperationalInsights
+# is only needed if we ship logs to Log Analytics — we don't (see env create
+# below with --logs-destination none), but registering avoids friction if the
+# script is later modified to enable logs.
 az provider register --namespace Microsoft.App --wait --only-show-errors >/dev/null
+az provider register --namespace Microsoft.OperationalInsights --wait --only-show-errors >/dev/null
 
 # ─── 1. resource group ───────────────────────────────────────────────────
 az group create --name "$RG" --location "$LOCATION" --output none
@@ -67,6 +77,7 @@ az storage share-rm create \
 az containerapp env create \
   --resource-group "$RG" --name "$ENV_NAME" \
   --location "$LOCATION" \
+  --logs-destination none \
   --output none
 
 az containerapp env storage set \
