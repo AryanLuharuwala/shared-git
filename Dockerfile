@@ -62,8 +62,12 @@ EXPOSE 4455
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -fsS http://localhost:4455/health || exit 1
 
-# Run as non-root for the runtime image.
-RUN mkdir -p /data && chown -R node:node /data /app
-USER node
+RUN mkdir -p /data
+
+# Note: we stay as root here on purpose. Azure Container Apps mounts Azure
+# Files volumes as root:root with restrictive perms, so dropping to a
+# non-root user produces EACCES on /data writes. The blast radius is just
+# this single container with one bound port; the SURD_TOKEN secret stays
+# in env vars regardless of UID.
 
 CMD ["node", "--enable-source-maps", "server/dist/index.js"]

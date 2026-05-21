@@ -34,7 +34,12 @@ export class Storage {
   constructor(config: ServerConfig) {
     this.dataDir = config.dataDir;
     this.db = new Database(resolve(config.dataDir, 'surd.db'));
-    this.db.pragma('journal_mode = WAL');
+    // WAL is great on local filesystems but breaks on network mounts like
+    // Azure Files (CIFS/SMB) because the lock semantics don't match. Allow
+    // the journal mode to be overridden — set SURD_SQLITE_JOURNAL_MODE=DELETE
+    // when running with a CIFS-backed /data.
+    const journalMode = (process.env.SURD_SQLITE_JOURNAL_MODE ?? 'WAL').toUpperCase();
+    this.db.pragma(`journal_mode = ${journalMode}`);
     this.db.pragma('foreign_keys = ON');
     this.migrate();
   }

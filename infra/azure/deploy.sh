@@ -120,6 +120,10 @@ properties:
             value: "${SURD_TOKEN}"
           - name: SURD_DATA_DIR
             value: /data
+          # /data is an Azure Files (CIFS) mount; SQLite's WAL journal mode
+          # is broken over CIFS, so force DELETE.
+          - name: SURD_SQLITE_JOURNAL_MODE
+            value: DELETE
         resources:
           cpu: 0.25
           memory: 0.5Gi
