@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+data
+*.vsix
+.git
+.gitignore
+.claude
+.vscode
+vscode-extension
+*.log
+README.md
+infra

@@ -1,0 +1,99 @@
+name: build + publish + deploy surd-server
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # push to ghcr.io under the same repo owner
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      primary_tag: ${{ steps.primary.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Multi-arch (amd64 + arm64) so the image works on any VPS, an Oracle
+      # ARM free-tier VM, a Raspberry Pi, Azure Container Apps, etc.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/surd-server
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pick a single, immutable tag for downstream jobs. Branch / latest tags
+      # would be ambiguous during a rolling deploy.
+      - id: primary
+        run: echo "tag=ghcr.io/${{ github.repository }}/surd-server:sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-azure:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only deploy on the default branch. Skip cleanly if Azure secrets aren't
+    # set, so the workflow keeps working in forks / before infra is set up.
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: skip if no azure creds
+        id: gate
+        run: |
+          if [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "AZURE_CREDENTIALS not set; skipping deploy"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - if: steps.gate.outputs.skip == 'false'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - if: steps.gate.outputs.skip == 'false'
+        name: roll Container App to new image
+        env:
+          RG: ${{ vars.AZURE_RG || 'surd-rg' }}
+          APP: ${{ vars.AZURE_APP || 'surd-server' }}
+          IMAGE: ${{ needs.build.outputs.primary_tag }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --only-show-errors --upgrade 2>/dev/null || true
+          echo "rolling $APP in $RG to $IMAGE"
+          az containerapp update \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --image "$IMAGE" \
+            --output none
+          FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "deployed: https://$FQDN"
+          curl -fsS "https://$FQDN/health" && echo
