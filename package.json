@@ -1,0 +1,22 @@
+{
+  "name": "surd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Git-like repository with real-time CRDT collaboration and shared Claude sessions",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "cli",
+    "shared"
+  ],
+  "//": "vscode-extension is installed separately because it uses CommonJS",
+  "scripts": {
+    "build": "npm run build -ws --if-present",
+    "dev:server": "npm run dev -w server",
+    "server": "npm run start -w server",
+    "cli": "npm run start -w cli --"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
